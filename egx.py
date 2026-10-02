@@ -1,100 +1,75 @@
+import os
 import requests
 import yfinance as yf
 from datetime import datetime
 import pytz
 
-# ==========================================
-# 1. إعدادات التليجرام (Telegram Config)
-# ==========================================
-TELEGRAM_BOT_TOKEN = "8834063429:AAGIAHDB26_xNKE9y9sZFE7NQmW-K0zKgjc"
-TELEGRAM_CHAT_ID = "1012546503"
+# إعدادات التليجرام
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-def send_telegram_alert(message):
+def send_telegram_message(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram credentials not found.")
+        return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
     }
     try:
         response = requests.post(url, json=payload)
-        return response.json()
+        response.raise_for_status()
+        print("Message sent successfully.")
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"Error sending message: {e}")
 
-# ==========================================
-# 2. جلب القائمة الكاملة لكل أسهم البورصة المصرية تلقائياً
-# ==========================================
-def get_all_egx_tickers():
-    # هنا بنسحب أو نولد قائمة شاملة لكل كود مدرج في البورصة المصرية ينتهي بـ .CA
-    # لضمان تغطية السوق بالكامل (EGX30, EGX70, وكل الأسهم الأخرى)
-    print("Fetching complete EGX market tickers list...")
+def analyze_egx():
+    # قائمة ببعض أسهم البورصة المصرية الشهيرة للمتابعة
+    tickers = ["COMI.CA", "HELI.CA", "PHDC.CA", "EGTS.CA", "FWRY.CA", "AMOC.CA", "ESRS.CA", "ETRS.CA"]
     
-    # قائمة موسعة جداً تضم النطاق الأكبر لأسهم البورصة المصرية المتاحة للتداول
-    base_symbols = [
-        "CIBN", "FWRY", "TMGH", "EFIH", "PHDC", "ISPH", "HRHO", "HELI", "ABUK", "SKPC",
-        "OCDI", "MFPC", "ADIB", "JUFO", "ORWE", "ETEL", "ESRS", "EAST", "MNHD", "AMOC",
-        "COMI", "AUTO", "CCAP", "EKHO", "SWDY", "OIH", "VERT", "MOIL", "ZMID", "ELSH",
-        "PORT", "ARAB", "SPIN", "PRDC", "ROTO", "DAPH", "IDHC", "CLHO", "RMDA", "EPCO",
-        "ACAMD", "BIND", "CAED", "CERA", "DZTS", "EALR", "EDBM", "EGAS", "ELNTAG", "ENGC",
-        "ETRS", "GCAP", "GDWA", "ISMA", "KABO", "MENA", "MOIN", "MPRC", "MREL", "NCCW",
-        "NEDA", "OMLX", "PHAR", "PIOH", "RAIN", "RTVC", "sall", "Scim", "SDTI", "SNB",
-        "SPHT", "SVCE", "TAQA", "TASC", "UNIT", "WATA", "WKOL", "ARCI", "ASCM", "ASPI"
-    ]
-    
-    # تحويل الرموز لصيغة السوق المصري .CA
-    return [f"{symbol}.CA" for symbol in base_symbols]
+    report = "📊 *تقرير تحليل السوق وصانع السوق (EGX)*\n\n"
+    active_alerts = False
 
-def scan_entire_egx_market():
-    egx_tickers = get_all_egx_tickers()
-    print(found := f"Scanning all {len(egx_tickers)} EGX stocks for volume spikes and accumulation...")
-    
-    accumulation_results = []
-    
-    for ticker in egx_tickers:
+    cairo_tz = pytz.timezone('Africa/Cairo')
+    current_time = datetime.now(cairo_tz).strftime('%Y-%m-%d %I:%M %p')
+    report += f"🕒 وقت التقرير: {current_time}\n\n"
+
+    for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
-            hist = stock.history(period="5d") # فحص آخر جلسات لحساب متوسط الحجم
+            hist = stock.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                continue
             
-            if len(hist) >= 2:
-                latest_volume = hist['Volume'].iloc[-1]
-                avg_volume = hist['Volume'].iloc[:-1].mean()
-                latest_close = hist['Close'].iloc[-1]
-                prev_close = hist['Close'].iloc[-2]
-                
-                # شرط التجميع وصانع السوق: حجم تداول عالي مع ثبات أو صعود هادئ
-                if avg_volume > 1000 and latest_volume > (avg_volume * 1.3) and latest_close >= prev_close:
-                    accumulation_results.append({
-                        "name": ticker.replace(".CA", ""),
-                        "signal": f"حجم تداول أعلى من المتوسط بـ {int((latest_volume/avg_volume)*100)}% مع استقرار سعري"
-                    })
-        except Exception as e:
-            continue
+            current_price = hist['Close'].iloc[-1]
+            prev_price = hist['Close'].iloc[-2]
+            price_change = ((current_price - prev_price) / prev_price) * 100
             
-    return accumulation_results
+            current_volume = hist['Volume'].iloc[-1]
+            avg_volume = hist['Volume'].iloc[:-1].mean()
+            
+            # فحص حجم التداول والطلبات (صانع السوق)
+            if current_volume > (avg_volume * 1.5):
+                active_alerts = True
+                report += f"🐋 *كشف أمر جبل / نشاط صانع السوق:*\n"
+                report += f"السهم `{ticker.replace('.CA', '')}` يشهد ضغط شراء قوي جداً وتداولات مكثفة (الحجم الحالي يتجاوز المتوسط بنسبة كبيرة).\n"
+                report += f"🔹 السعر الحالي: `{current_price:.2f}` (تغير: `{price_change:+.2f}%`)\n"
+                report += f"🔹 حجم التداول: `{int(current_volume):,}` سهم\n\n"
+            elif price_change >= 3.0:
+                active_alerts = True
+                report += f"🎯 *فرصة مضاربة سريعة (Target 3-4%):*\n"
+                report += f"السهم `{ticker.replace('.CA', '')}` حقق ارتفاعاً بنسبة `{price_change:+.2f}%` وجاهز لتحقيق الهدف!\n"
+                report += f"🔹 السعر: `{current_price:.2f}` | الحجم: `{int(current_volume):,}`\n\n"
 
-def run_daily_screener():
-    cairo_tz = pytz.timezone('Africa/Cairo')
-    current_time = datetime.now(cairo_tz)
-    
-    picks = scan_entire_egx_market()
-    
-    if not picks:
-        message = f"📊 *تقرير تجميع البورصة المصرية (EGX)*\n"
-        message += f"📅 التاريخ: {current_time.strftime('%Y-%m-%d | %I:%M %p')}\n\n"
-        message += "تم فحص جميع الأسهم المتاحة بالسوق، ولم تُظهر الجلسة طفرات تجميع واضحة اليوم."
-    else:
-        message = f"📊 *تقرير تجميع السوق الشامل (EGX)*\n"
-        message += f"📅 التاريخ: {current_time.strftime('%Y-%m-%d | %I:%M %p')}\n\n"
-        message += f"الأسهم التي ظهرت عليها إشارات تجميع السيولة:\n\n"
-        
-        for stock in picks:
-            message += f"🔹 *{stock['name']}*\n   💡 المؤشر: {stock['signal']}\n\n"
-            
-    message += "⚡ *جاهز للمتابعة واتخاذ القرار على تطبيق Thndr بكرة الصبح!*"
-    
-    send_telegram_alert(message)
-    print("Full market report sent successfully to Telegram.")
+        except Exception as e:
+            print(f"Error processing {ticker}: {e}")
+
+    if not active_alerts:
+        report += "ℹ️ لا توجد تحركات غير عادية أو إشارات لصانع السوق مطابقة للشروط في الجلسة الحالية، السوق يتحرك في نطاق هادئ."
+
+    send_telegram_message(report)
 
 if __name__ == "__main__":
-    run_daily_screener()
+    analyze_egx()
